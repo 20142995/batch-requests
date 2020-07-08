@@ -18,9 +18,9 @@ def try_get_title(url,timeout=10):
     banner = ''
     try:
         url = url if '://' in url else 'http://'+url
-        if ':443' in url:
+        if url.endswith(':443'):
             url = url.replace('http://','https://').replace(':443','')
-        if ':80' in url:
+        if url.endswith(':80'):
             url = url.replace(':80','')
         r = requests.get(url,headers=headers, timeout=timeout,verify=False)
         status = r.status_code
