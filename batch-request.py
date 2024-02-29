@@ -1,57 +1,79 @@
 #!/usr/bin/env python3
 # -*- coding: UTF-8 -*-
 
-import re
 import sys
-import requests
+import asyncio
+import aiohttp
+from bs4 import BeautifulSoup
 import xlsxwriter
 
-from concurrent.futures import ThreadPoolExecutor
 
-requests.packages.urllib3.disable_warnings()
-
-headers = {'User-Agent' : 'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/44.0.2403.125 Safari/537.36','Connection':'close'}
-
-def try_get_title(url,timeout=10):
-    status = 'error'
-    title = ''
-    banner = ''
+async def fetch_webinfo(session, url):
+    """
+    异步获取单个URL的网页信息
+    """
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
+    }
     try:
-        url = url if '://' in url else 'http://'+url
-        if url.endswith(':443'):
-            url = url.replace('http://','https://').replace(':443','')
-        if url.endswith(':80'):
-            url = url.replace(':80','')
-        r = requests.get(url,headers=headers, timeout=timeout,verify=False)
-        status = r.status_code
-        r.encoding = r.apparent_encoding
-        title = re.search(r'<title>(.*)</title>', r.text) #get the title
-        if title:
-            title = title.group(1).strip().strip("\r").strip('\n')
-        banner = r.headers.get('Server','')
-    except:
-        pass
-    return url,status,banner,title
+        async with session.get(url, headers=headers, ssl=False) as response:
+            status_code = response.status
+            html = await response.text()
+            headers = response.headers
+            soup = BeautifulSoup(html, 'html.parser')
+            title = soup.title.string.strip() if soup.title else ''
+            print(url,title)
+            return {'url': url, 'status_code': status_code, 'title': title,
+                    'Content-Length': headers.get('Content-Length',len(html) if html else 0),
+                    'Server': headers.get('Server', ''), 'headers': '\n'.join([f'{k}: {v}' for k, v in headers.items()]),
+                    'html': html, 'error': ''}
+    except aiohttp.ClientError as e:
+        print(url,e)
+        return {'url': url, 'status_code': 0, 'title': '', 'Content-Length': 0, 'Server': '',
+                'headers': '', 'html': '', 'error': str(e)}
 
-if __name__ == "__main__":
-    if len(sys.argv) != 3:
-        print("{} <链接列表文件> <线程数>".format(sys.argv[0]))
-    else:
-        inputfile = sys.argv[1]
-        outputfile = sys.argv[1] + '-result.xlsx'
-        threadNUM = int(sys.argv[2])
-        URLS = [i.strip() for i in  open(inputfile,'r',encoding='utf8').readlines()]
-        workbook = xlsxwriter.Workbook(outputfile)
-        sheet = workbook.add_worksheet() 
-        sheet.activate() 
-        sheet.write_row('A1',['Url','StatusCode','Banner','Title'])
-        ROW = 2
-        pool = ThreadPoolExecutor(max_workers=threadNUM)
-        for res in pool.map(try_get_title, URLS):
-            print(res)
-            sheet.write_row('A{}'.format(ROW),res)
-            ROW += 1
-        workbook.close()
-        print("save to {}".format(outputfile))
+
+async def main(urls):
+    """
+    主函数，处理并发获取多个URL的网页信息
+    """
+    async with aiohttp.ClientSession() as session:
+        tasks = []
+        for url in urls:
+            task = asyncio.ensure_future(fetch_webinfo(session, url))
+            tasks.append(task)
+        responses = await asyncio.gather(*tasks)
+        results = {url: response for url, response in zip(urls, responses)}
+        return results
+
+
+def save_to_xlsx(filename, results):
+    """
+    将网页信息保存到Excel文件中
+    """
+    workbook = xlsxwriter.Workbook(filename)
+    worksheet = workbook.add_worksheet("Webpage Info")
+    worksheet.write_row(0, 0, ['URL', 'Status Code', 'Title', 'Content-Length', 'Server', 'Headers', 'HTML', 'Error'])
+    row = 1
+    for url, response in results.items():
+        worksheet.write_row(row, 0, [
+            response['url'], response['status_code'], response['title'], response['Content-Length'],
+            response['Server'], response['headers'], response['html'], response['error']
+        ])
+        row += 1
+    workbook.close()
+
+
+
+if __name__ == '__main__':
+    if len(sys.argv) != 2:
+        sys.exit(f'Usage: {sys.argv[0]} urls.txt')
+
+    urls_file = sys.argv[1]
+    urls = [url.strip() for url in open(urls_file, 'r', encoding='utf8').readlines()]
+    loop = asyncio.get_event_loop()
+    results = loop.run_until_complete(main(urls))
+    save_to_xlsx(f'{urls_file}.xlsx', results)
+
 
         
